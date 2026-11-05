@@ -34,12 +34,19 @@ const ROUND_COUNT := 10
 const ROUND_ADVANCE_THRESHOLD := 0.98
 const RESTART_BOX_SIZE := 1.4
 
+const TRANSITION_OLD_SINK_DURATION := 0.6
+const TRANSITION_RISE_DELAY := 0.65
+const TRANSITION_RISE_DURATION := 1.6
+const TRANSITION_SETTLE_DURATION := 0.5
+const TRANSITION_RISE_OFFSET := -2.6
+
 @onready var tower_root: Node3D = $CubeTower
 @onready var floor_mesh: MeshInstance3D = $Lab/FloorBody/FloorMesh
 @onready var rig: XrRig = $XROrigin3D
 @onready var camera: XRCamera3D = $XROrigin3D/XRCamera3D
 @onready var left_controller: XRController3D = $XROrigin3D/LeftController
 @onready var right_controller: XRController3D = $XROrigin3D/RightController
+@onready var tower_light: OmniLight3D = $TowerLight
 
 enum BallMode { REST, HELD, FLYING }
 enum Powerup { NONE, HEAVY, ICE, FIRE }
@@ -117,6 +124,13 @@ var _restart_box: RigidBody3D
 var _restart_label: Label3D
 var _rounds_complete := false
 var _smoke_texture: ImageTexture = null
+enum TransitionPhase { SINKING, RISING, SETTLING }
+var _transition_active := false
+var _transition_time := 0.0
+var _transition_phase := TransitionPhase.SINKING
+var _transition_old_cubes: Array[RigidBody3D] = []
+var _transition_rise_start := 0.0
+var _transition_settle_start := 0.0
 
 
 func _init() -> void:
@@ -291,7 +305,7 @@ func _prepare_shared_cubes() -> void:
 		_row_mats.append(mat)
 
 
-func _spawn_tower(design_index: int = 1) -> void:
+func _spawn_tower(design_index: int = 1, animate_rise: bool = false) -> void:
 	for c in cubes:
 		if is_instance_valid(c):
 			c.queue_free()
@@ -302,8 +316,17 @@ func _spawn_tower(design_index: int = 1) -> void:
 		var body := RigidBody3D.new()
 		body.name = "Cube%03d" % i
 		body.mass = CUBE_MASS
-		body.position = TOWER_CENTER + positions[i]
-		body.freeze = true
+		var home_pos := TOWER_CENTER + positions[i]
+		body.position = home_pos
+		if animate_rise:
+			body.position.y += TRANSITION_RISE_OFFSET
+			body.freeze = true
+			body.collision_layer = 0
+			body.collision_mask = 0
+			body.set_meta("rise_home", home_pos)
+			body.set_meta("rise_start", body.position)
+		else:
+			body.freeze = true
 		body.linear_damp = 0.4
 		body.angular_damp = 3.0
 		body.physics_material_override = _cube_phys
@@ -319,11 +342,14 @@ func _spawn_tower(design_index: int = 1) -> void:
 		shape.shape = _cube_shape
 		body.add_child(shape)
 		body.set_meta("knocked", false)
-		body.set_meta("home", body.position)
+		body.set_meta("home", home_pos)
 		tower_root.add_child(body)
 		cubes.append(body)
 	_cube_sound_until = Time.get_ticks_msec() + 700
-	get_tree().create_timer(0.05).timeout.connect(_unfreeze_cubes)
+	if animate_rise:
+		_transition_rise_start = _transition_time
+	else:
+		get_tree().create_timer(0.05).timeout.connect(_unfreeze_cubes)
 	_update_score_label()
 
 
@@ -510,8 +536,16 @@ func _design_castle() -> Array[Vector3]:
 
 func _unfreeze_cubes() -> void:
 	for c in cubes:
-		if is_instance_valid(c):
-			c.freeze = false
+		if not is_instance_valid(c):
+			continue
+		c.freeze = false
+		c.scale = Vector3.ONE
+		c.collision_layer = 1
+		c.collision_mask = 1
+		c.position = c.get_meta("home")
+		c.linear_velocity = Vector3.ZERO
+		c.angular_velocity = Vector3.ZERO
+		c.sleeping = true
 
 
 func _build_balls() -> void:
@@ -924,6 +958,8 @@ func _process_events(delta: float) -> void:
 
 
 func _update_knocks() -> void:
+	if _transition_active:
+		return
 	for c in cubes:
 		if not is_instance_valid(c) or c.get_meta("knocked", false):
 			continue
@@ -939,27 +975,44 @@ func _update_knocks() -> void:
 
 
 func _check_round_progress() -> void:
-	if _rounds_complete or cubes.is_empty():
+	if _transition_active or _rounds_complete or cubes.is_empty():
 		return
 	var progress := float(score) / float(cubes.size())
 	if progress < ROUND_ADVANCE_THRESHOLD:
 		return
 	if current_round < ROUND_COUNT:
-		_next_round()
+		_start_round_transition()
 	else:
 		_complete_rounds()
 
 
-func _next_round() -> void:
+func _start_round_transition() -> void:
+	if _transition_active:
+		return
+	_transition_active = true
+	_transition_time = 0.0
+	_transition_phase = TransitionPhase.SINKING
 	total_score += score
 	current_round += 1
 	_pending_powerup = Powerup.NONE
 	_clear_powerup()
 	_respawn_ball(left_ball_state, false)
 	_respawn_ball(right_ball_state, false)
-	_spawn_tower(current_round)
-	_show_hint("ROUND %d/%d" % [current_round, ROUND_COUNT], 2.5)
+
+	_transition_old_cubes = cubes.duplicate()
+	cubes.clear()
+	for c in _transition_old_cubes:
+		if not is_instance_valid(c):
+			continue
+		c.freeze = true
+		c.collision_layer = 0
+		c.collision_mask = 0
+
+	_show_hint("ROUND CLEAR!", 1.5)
 	_play_sound("chime", TOWER_CENTER, 1.0)
+	if tower_light != null:
+		tower_light.light_energy = 2.2
+	_spawn_tower(current_round, true)
 	_update_score_label()
 
 
@@ -1081,7 +1134,65 @@ func _hand_track(delta: float) -> void:
 		_hand_prev[hand] = now
 
 
+func _update_transition(delta: float) -> void:
+	_transition_time += delta
+
+	# Fade the flash light back to off.
+	if tower_light != null and tower_light.light_energy > 0.0:
+		tower_light.light_energy = maxf(0.0, tower_light.light_energy - delta * 3.0)
+
+	if _transition_phase == TransitionPhase.SINKING:
+		if _transition_old_cubes.size() > 0:
+			var sink_t := clampf(_transition_time / TRANSITION_OLD_SINK_DURATION, 0.0, 1.0)
+			for c in _transition_old_cubes:
+				if not is_instance_valid(c):
+					continue
+				var home: Vector3 = c.get_meta("home")
+				c.position = home.lerp(home + Vector3(0, -2.4, 0), sink_t)
+				var s := maxf(0.01, 1.0 - sink_t)
+				c.scale = Vector3(s, s, s)
+			if sink_t >= 1.0:
+				for c in _transition_old_cubes:
+					if is_instance_valid(c):
+						c.queue_free()
+				_transition_old_cubes.clear()
+				_transition_phase = TransitionPhase.RISING
+		else:
+			_transition_phase = TransitionPhase.RISING
+
+	elif _transition_phase == TransitionPhase.RISING:
+		var rise_t := (_transition_time - _transition_rise_start - TRANSITION_RISE_DELAY) / TRANSITION_RISE_DURATION
+		if rise_t < 0.0:
+			return
+		if rise_t < 1.0:
+			var eased := ease(rise_t, -2.0)
+			for c in cubes:
+				if not is_instance_valid(c):
+					continue
+				var start: Vector3 = c.get_meta("rise_start")
+				var home: Vector3 = c.get_meta("rise_home")
+				c.position = start.lerp(home, eased)
+		else:
+			for c in cubes:
+				if not is_instance_valid(c):
+					continue
+				c.position = c.get_meta("rise_home")
+			_transition_settle_start = _transition_time
+			_transition_phase = TransitionPhase.SETTLING
+
+	elif _transition_phase == TransitionPhase.SETTLING:
+		if _transition_time - _transition_settle_start >= TRANSITION_SETTLE_DURATION:
+			_unfreeze_cubes()
+			_transition_active = false
+			_transition_phase = TransitionPhase.SINKING
+			_show_hint("ROUND %d/%d" % [current_round, ROUND_COUNT], 2.5)
+			_play_sound("chime", TOWER_CENTER, 1.0)
+			_update_score_label()
+
+
 func _process(delta: float) -> void:
+	if _transition_active:
+		_update_transition(delta)
 	_hand_track(delta)
 	if active_powerup != Powerup.NONE:
 		_powerup_time -= delta

@@ -7,8 +7,8 @@
 background_mode = 1
 background_color = Color(0.02, 0.02, 0.03, 1)
 ambient_light_source = 2
-ambient_light_color = Color(0.42, 0.44, 0.5, 1)
-ambient_light_energy = 1.45
+ambient_light_color = Color(0.42, 0.4, 0.5, 1)
+ambient_light_energy = 1.5
 
 [sub_resource type="BoxMesh" id="floor_mesh"]
 size = Vector3(18, 0.2, 18)
@@ -42,6 +42,19 @@ size = Vector3(0.2, 12, 18.4)
 
 [sub_resource type="BoxShape3D" id="wall_shape_x"]
 size = Vector3(0.2, 12, 18.4)
+
+[sub_resource type="BoxMesh" id="top_glow_mesh_z"]
+size = Vector3(18.4, 0.12, 0.05)
+
+[sub_resource type="StandardMaterial3D" id="purple_glow_mat"]
+albedo_color = Color(0.25, 0.05, 0.35, 1)
+roughness = 0.4
+emission_enabled = true
+emission = Color(0.65, 0.15, 0.95, 1)
+emission_energy_multiplier = 3.0
+
+[sub_resource type="BoxMesh" id="top_glow_mesh_x"]
+size = Vector3(0.05, 0.12, 18.4)
 
 [sub_resource type="BoxMesh" id="glow_mesh"]
 size = Vector3(4.6, 2.6, 0.06)
@@ -96,7 +109,7 @@ albedo_color = Color(0.62, 0.1, 0.1, 1)
 roughness = 0.6
 
 [sub_resource type="BoxShape3D" id="cab_shape"]
-size = Vector3(1.2, 1.8, 0.85)
+size = Vector3(1.2, 1.8, 0.86433107)
 
 [sub_resource type="BoxMesh" id="plank_mesh"]
 size = Vector3(0.75, 0.07, 3.4)
@@ -198,6 +211,50 @@ surface_material_override/0 = SubResource("wall_mat")
 [node name="WallShape" type="CollisionShape3D" parent="Lab/WallRight" unique_id=1082339444]
 shape = SubResource("wall_shape_x")
 
+[node name="WallBackTopGlow" type="MeshInstance3D" parent="Lab" unique_id=2000000001]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 11.64, -9.075)
+mesh = SubResource("top_glow_mesh_z")
+surface_material_override/0 = SubResource("purple_glow_mat")
+
+[node name="WallFrontTopGlow" type="MeshInstance3D" parent="Lab" unique_id=2000000002]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 11.64, 9.075)
+mesh = SubResource("top_glow_mesh_z")
+surface_material_override/0 = SubResource("purple_glow_mat")
+
+[node name="WallLeftTopGlow" type="MeshInstance3D" parent="Lab" unique_id=2000000003]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9.075, 11.64, 0)
+mesh = SubResource("top_glow_mesh_x")
+surface_material_override/0 = SubResource("purple_glow_mat")
+
+[node name="WallRightTopGlow" type="MeshInstance3D" parent="Lab" unique_id=2000000004]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.075, 11.64, 0)
+mesh = SubResource("top_glow_mesh_x")
+surface_material_override/0 = SubResource("purple_glow_mat")
+
+[node name="CeilingGlow0" type="OmniLight3D" parent="Lab" unique_id=2000000005]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -8.6, 11.4, -8.6)
+light_color = Color(0.65, 0.15, 0.95, 1)
+light_energy = 0.85
+omni_range = 15.0
+
+[node name="CeilingGlow1" type="OmniLight3D" parent="Lab" unique_id=2000000006]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.6, 11.4, -8.6)
+light_color = Color(0.65, 0.15, 0.95, 1)
+light_energy = 0.85
+omni_range = 15.0
+
+[node name="CeilingGlow2" type="OmniLight3D" parent="Lab" unique_id=2000000007]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -8.6, 11.4, 8.6)
+light_color = Color(0.65, 0.15, 0.95, 1)
+light_energy = 0.85
+omni_range = 15.0
+
+[node name="CeilingGlow3" type="OmniLight3D" parent="Lab" unique_id=2000000008]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 8.6, 11.4, 8.6)
+light_color = Color(0.65, 0.15, 0.95, 1)
+light_energy = 0.85
+omni_range = 15.0
+
 [node name="GlowPanel" type="MeshInstance3D" parent="Lab" unique_id=77432858]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 5, -9.09)
 mesh = SubResource("glow_mesh")
@@ -222,73 +279,82 @@ surface_material_override/0 = SubResource("pad_mat")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 4.35, 0, -4.7)
 
 [node name="TopMesh" type="MeshInstance3D" parent="Lab/Bench" unique_id=1174534288]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.98, 0)
+transform = Transform3D(0.03104648, 0, -0.99951804, 0, 1, 0, 0.99951804, 0, 0.03104648, 4.2606034, 0.9217185, 0)
 mesh = SubResource("bench_top_mesh")
 surface_material_override/0 = SubResource("bench_top_mat")
 
 [node name="LegLeft" type="MeshInstance3D" parent="Lab/Bench" unique_id=1632962189]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1, 0.46, 0)
+transform = Transform3D(0.03104648, 0, -0.99951804, 0, 1, 0, 0.99951804, 0, 0.03104648, 4.2295575, 0.46, -0.9995179)
 mesh = SubResource("bench_leg_mesh")
 surface_material_override/0 = SubResource("bench_leg_mat")
 
 [node name="LegRight" type="MeshInstance3D" parent="Lab/Bench" unique_id=71101333]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0.46, 0)
+transform = Transform3D(0.03104648, 0, -0.99951804, 0, 1, 0, 0.99951804, 0, 0.03104648, 4.2916493, 0.46, 0.99951816)
 mesh = SubResource("bench_leg_mesh")
 surface_material_override/0 = SubResource("bench_leg_mat")
 
 [node name="BenchShape" type="CollisionShape3D" parent="Lab/Bench" unique_id=47181613]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.5, 0)
+transform = Transform3D(0.02510077, 0, -0.99968493, 0, 1, 0, 0.99968493, 0, 0.02510077, 4.3228745, 0.5, -0.062057495)
 shape = SubResource("bench_shape")
 
 [node name="Cabinet" type="StaticBody3D" parent="Lab" unique_id=1649521236]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -4.65, 0.9, -5.55)
 
 [node name="CabMesh" type="MeshInstance3D" parent="Lab/Cabinet" unique_id=1871504705]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, -1.1308813)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.9508581, 0.04118657, -0.98052835)
 mesh = SubResource("cab_mesh")
 surface_material_override/0 = SubResource("cab_mat")
 
 [node name="CabShape" type="CollisionShape3D" parent="Lab/Cabinet" unique_id=745754034]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -1.9582672, 0, -1.012198)
 shape = SubResource("cab_shape")
 
 [node name="ShelfA" type="StaticBody3D" parent="Lab" unique_id=954627614]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.8, 1.55, -1)
 
 [node name="PlankMesh" type="MeshInstance3D" parent="Lab/ShelfA" unique_id=91824988]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9188747, 0, 0)
 mesh = SubResource("plank_mesh")
 surface_material_override/0 = SubResource("plank_mat")
 
 [node name="PlankShape" type="CollisionShape3D" parent="Lab/ShelfA" unique_id=1482391499]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.873742, 0, 0)
 shape = SubResource("plank_shape")
 
 [node name="ShelfB" type="StaticBody3D" parent="Lab" unique_id=683478530]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.8, 2.35, -1)
 
 [node name="PlankMesh" type="MeshInstance3D" parent="Lab/ShelfB" unique_id=1781434582]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9188747, 0, 0)
 mesh = SubResource("plank_mesh")
 surface_material_override/0 = SubResource("plank_mat")
 
 [node name="PlankShape" type="CollisionShape3D" parent="Lab/ShelfB" unique_id=446186647]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9128504, 0, 0)
 shape = SubResource("plank_shape")
 
 [node name="CrateShelfA" type="StaticBody3D" parent="Lab" unique_id=1777446815]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.8, 1.845, -0.2)
 
 [node name="CrateMesh" type="MeshInstance3D" parent="Lab/CrateShelfA" unique_id=1996735807]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9188747, 0, 0)
 mesh = SubResource("crate_mesh")
 surface_material_override/0 = SubResource("crate_mat")
 
 [node name="CrateShape" type="CollisionShape3D" parent="Lab/CrateShelfA" unique_id=1641888212]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.892459, 0, 0)
 shape = SubResource("crate_shape")
 
 [node name="CrateShelfB" type="StaticBody3D" parent="Lab" unique_id=75464768]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -5.8, 2.645, -1.8)
 
 [node name="CrateMesh" type="MeshInstance3D" parent="Lab/CrateShelfB" unique_id=261165642]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9603968, 0, 0)
 mesh = SubResource("crate_mesh")
 surface_material_override/0 = SubResource("crate_mat")
 
 [node name="CrateShape" type="CollisionShape3D" parent="Lab/CrateShelfB" unique_id=1581870117]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -2.9188747, 0, 0)
 shape = SubResource("crate_shape")
 
 [node name="CrateFloorA" type="StaticBody3D" parent="Lab" unique_id=1786793340]
@@ -328,7 +394,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 2)
 script = ExtResource("2_rig")
 
 [node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D" unique_id=308306323]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.7, 0)
+transform = Transform3D(1, 0, 0, 0, 0.9946817, -0.10299624, 0, 0.10299624, 0.9946817, 0.06529474, 1.7, 0)
 
 [node name="LeftController" type="XRController3D" parent="XROrigin3D" unique_id=1384931040]
 tracker = &"left_hand"

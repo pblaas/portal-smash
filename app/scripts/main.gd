@@ -88,6 +88,11 @@ var _hint_time := 0.0
 var _version: Label3D
 var _sound_players: Array[AudioStreamPlayer3D] = []
 var _sound_next := 0
+var _bgm_calm: AudioStreamPlayer
+var _bgm_intense: AudioStreamPlayer
+const BGM_CALM_DB := -6.0
+const BGM_INTENSE_DB := -6.0
+const BGM_MUTE_DB := -80.0
 var _menu_was := false
 var _ax_was := false
 var _grip_was := {}
@@ -134,6 +139,8 @@ func _ready() -> void:
 	_build_wall_details()
 	_build_labels()
 	_build_sound_pool()
+	_build_music()
+	_build_hand_models()
 	print("lab ready: %d cubes stacked" % cubes.size())
 	_show_hint("Hold GRIP on either hand to catch that hand's ball.\nSwing and release to throw it at the tower!", 9.0)
 
@@ -592,6 +599,100 @@ func _build_sound_pool() -> void:
 		_sound_players.append(player)
 
 
+func _build_music() -> void:
+	_bgm_calm = AudioStreamPlayer.new()
+	_bgm_calm.name = "BgmCalm"
+	_bgm_calm.stream = sfx.bgm_calm
+	_bgm_calm.volume_db = BGM_CALM_DB
+	add_child(_bgm_calm)
+	_bgm_calm.play()
+
+	_bgm_intense = AudioStreamPlayer.new()
+	_bgm_intense.name = "BgmIntense"
+	_bgm_intense.stream = sfx.bgm_intense
+	_bgm_intense.volume_db = BGM_MUTE_DB
+	add_child(_bgm_intense)
+	_bgm_intense.play()
+
+
+func _build_hand_models() -> void:
+	_build_hand_for(left_controller, Color(0.15, 0.75, 1.0))
+	_build_hand_for(right_controller, Color(1.0, 0.5, 0.12))
+
+
+func _build_hand_for(controller: XRController3D, color: Color) -> void:
+	var hand := Node3D.new()
+	hand.name = "HandModel"
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.4
+	mat.metallic = 0.2
+
+	var palm := MeshInstance3D.new()
+	palm.name = "Palm"
+	var palm_mesh := BoxMesh.new()
+	palm_mesh.size = Vector3(0.1, 0.09, 0.04)
+	palm.mesh = palm_mesh
+	palm.material_override = mat
+	palm.transform = Transform3D(Basis.IDENTITY, Vector3(0.0, 0.0, -0.02))
+	hand.add_child(palm)
+
+	for i in 3:
+		var finger := MeshInstance3D.new()
+		finger.name = "Finger%d" % i
+		var cyl := CylinderMesh.new()
+		cyl.top_radius = 0.012
+		cyl.bottom_radius = 0.011
+		cyl.height = 0.075
+		finger.mesh = cyl
+		finger.material_override = mat
+		var x := (float(i) - 1.0) * 0.028
+		var basis := Basis(Vector3.RIGHT, deg_to_rad(-90.0))
+		finger.transform = Transform3D(basis, Vector3(x, 0.02, -0.07))
+		hand.add_child(finger)
+
+	var thumb := MeshInstance3D.new()
+	thumb.name = "Thumb"
+	var thumb_cyl := CylinderMesh.new()
+	thumb_cyl.top_radius = 0.014
+	thumb_cyl.bottom_radius = 0.013
+	thumb_cyl.height = 0.055
+	thumb.mesh = thumb_cyl
+	thumb.material_override = mat
+	var thumb_basis := Basis(Vector3.RIGHT, deg_to_rad(-60.0)) * Basis(Vector3.UP, deg_to_rad(30.0))
+	thumb.transform = Transform3D(thumb_basis, Vector3(0.055, -0.01, -0.04))
+	hand.add_child(thumb)
+
+	controller.add_child(hand)
+
+
+func _spawn_debris(at: Vector3, color: Color, strength: float) -> void:
+	var particles := CPUParticles3D.new()
+	particles.name = "Debris"
+	particles.one_shot = true
+	particles.emitting = true
+	particles.amount = clampi(int(strength * 14.0), 4, 18)
+	particles.lifetime = 0.5
+	particles.explosiveness = 0.7
+	particles.direction = Vector3.UP
+	particles.spread = 90.0
+	particles.initial_velocity_min = 0.5
+	particles.initial_velocity_max = 2.8
+	particles.gravity = Vector3(0.0, -7.0, 0.0)
+
+	var box := BoxMesh.new()
+	box.size = Vector3(0.03, 0.03, 0.03)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.8
+	box.material = mat
+	particles.mesh = box
+
+	add_child(particles)
+	particles.global_position = at
+	get_tree().create_timer(particles.lifetime + 0.2).timeout.connect(particles.queue_free)
+
+
 func _build_wall_details() -> void:
 	_apply_wall_texture()
 	var trim_mat := StandardMaterial3D.new()
@@ -914,7 +1015,7 @@ func _respawn_ball(state: BallState, chime: bool) -> void:
 	if active_powerup == Powerup.NONE and _pending_powerup != Powerup.NONE:
 		_apply_pending_powerup(state)
 	if chime:
-		_play_sound("chime", state.body.global_position, 0.6)
+		_play_sound("chime", state.body.global_position, 1.0)
 		_show_hint("New ball!", 1.6)
 		var hand := left_controller if state == left_ball_state else right_controller
 		rig.pulse_haptic(hand, 0.5, 0.12)
@@ -986,8 +1087,13 @@ func _process(delta: float) -> void:
 		_powerup_time -= delta
 		if _powerup_time <= 0.0:
 			_clear_powerup()
-			if _pending_powerup != Powerup.NONE and _any_ball_at_rest():
-				_apply_pending_powerup()
+		if _pending_powerup != Powerup.NONE and _any_ball_at_rest():
+			_apply_pending_powerup()
+	if _bgm_calm != null and _bgm_intense != null:
+		var target_intense := BGM_INTENSE_DB if active_powerup != Powerup.NONE else BGM_MUTE_DB
+		var target_calm := BGM_MUTE_DB if active_powerup != Powerup.NONE else BGM_CALM_DB
+		_bgm_intense.volume_db = lerpf(_bgm_intense.volume_db, target_intense, delta * 4.0)
+		_bgm_calm.volume_db = lerpf(_bgm_calm.volume_db, target_calm, delta * 4.0)
 	for state: BallState in [left_ball_state, right_ball_state]:
 		if state.mode == BallMode.HELD:
 			var hand = state.held_hand
@@ -1015,6 +1121,12 @@ func _on_cube_hit(_other: Node, cube: RigidBody3D) -> void:
 	_hit_sound_at[id] = now
 	var strength := clampf(cube.linear_velocity.length() / 6.0, 0.15, 1.0)
 	_play_sound("knock", cube.global_position, strength)
+	if strength > 0.45:
+		var mesh := cube.get_node("Mesh") as MeshInstance3D
+		var col := Color(0.7, 0.7, 0.7)
+		if mesh != null and mesh.material_override is StandardMaterial3D:
+			col = (mesh.material_override as StandardMaterial3D).albedo_color
+		_spawn_debris(cube.global_position, col, strength)
 
 
 func _on_ball_hit(_other: Node, state: BallState) -> void:
@@ -1026,21 +1138,28 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 		return
 	state.sound_at = now
 	var strength := clampf(state.body.linear_velocity.length() / 7.0, 0.1, 1.0)
-	_play_sound("thud", state.body.global_position, strength)
 
 	if is_cube:
 		_indent_cube(_other as Node3D, state.body)
 		if active_powerup == Powerup.ICE and state == _powerup_state:
 			_other.apply_central_impulse(state.body.linear_velocity.normalized() * ICE_IMPULSE)
+			_play_sound("ice", state.body.global_position, 1.0)
 		elif active_powerup == Powerup.FIRE and state == _powerup_state and not _powerup_used:
 			_powerup_used = true
 			_explosion_center = state.body.global_position
 			_explosion_ball_state = state
+			_play_sound("fire", state.body.global_position, 1.0)
 			call_deferred("_explode")
 			return
+		elif active_powerup == Powerup.HEAVY and state == _powerup_state:
+			_play_sound("heavy", state.body.global_position, strength)
 		elif randf() < powerup_chance:
 			var roll := (randi() % 3) + 1
 			_grant_powerup(roll)
+		else:
+			_play_sound("thud", state.body.global_position, strength)
+	else:
+		_play_sound("thud", state.body.global_position, strength)
 
 
 func _indent_cube(cube: RigidBody3D, other: Node3D) -> void:

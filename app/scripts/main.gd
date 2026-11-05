@@ -62,6 +62,7 @@ class BallState:
 	var slow_time := 0.0
 	var sound_at := -100000
 	var trail: GPUParticles3D
+	var aura: GPUParticles3D
 
 
 var sfx := SoundKitScript.new()
@@ -124,6 +125,7 @@ var _restart_box: RigidBody3D
 var _restart_label: Label3D
 var _rounds_complete := false
 var _smoke_texture: ImageTexture = null
+
 enum TransitionPhase { SINKING, RISING, SETTLING }
 var _transition_active := false
 var _transition_time := 0.0
@@ -559,6 +561,8 @@ func _build_balls() -> void:
 	add_child(right_ball_state.body)
 	_build_ball_trail(left_ball_state)
 	_build_ball_trail(right_ball_state)
+	_build_ball_aura(left_ball_state)
+	_build_ball_aura(right_ball_state)
 	left_ball_state.body.global_position = _ball_rest_point(left_controller)
 	right_ball_state.body.global_position = _ball_rest_point(right_controller)
 
@@ -727,6 +731,18 @@ func _spawn_debris(at: Vector3, color: Color, strength: float) -> void:
 	get_tree().create_timer(particles.lifetime + 0.2).timeout.connect(particles.queue_free)
 
 
+func _spawn_impact_flash(at: Vector3, color: Color, strength: float) -> void:
+	var light := OmniLight3D.new()
+	light.light_color = color
+	light.light_energy = lerpf(1.4, 3.2, strength)
+	light.omni_range = lerpf(0.7, 1.5, strength)
+	add_child(light)
+	light.global_position = at
+	var fade := create_tween()
+	fade.tween_property(light, "light_energy", 0.0, lerpf(0.12, 0.24, strength))
+	fade.tween_callback(light.queue_free)
+
+
 func _build_wall_details() -> void:
 	_apply_wall_texture()
 	var trim_mat := StandardMaterial3D.new()
@@ -798,7 +814,7 @@ func _apply_wall_texture() -> void:
 	var wall_mat: StandardMaterial3D = wall_mesh.get_surface_override_material(0) as StandardMaterial3D
 	if wall_mat == null:
 		return
-	var tex := load("res://assets/wallpaper.jpg") as Texture2D
+	var tex := load("res://assets/wall_metal.jpg") as Texture2D
 	if tex == null:
 		return
 	wall_mat.albedo_texture = tex
@@ -858,6 +874,85 @@ func _build_ball_trail(state: BallState) -> void:
 	particles.draw_pass_1 = quad
 	state.body.add_child(particles)
 	state.trail = particles
+
+
+func _build_ball_aura(state: BallState) -> void:
+	var aura := GPUParticles3D.new()
+	aura.name = "ChargeAura"
+	aura.amount = 128
+	aura.lifetime = 0.6
+	aura.preprocess = 0.3
+	aura.emitting = false
+	aura.randomness = 0.5
+	aura.local_coords = false
+	aura.visibility_aabb = AABB(Vector3(-2.0, -2.0, -2.0), Vector3(4.0, 4.0, 4.0))
+
+	var particle_mat := ParticleProcessMaterial.new()
+	particle_mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	particle_mat.emission_sphere_radius = BALL_RADIUS * 1.1
+	particle_mat.direction = Vector3.UP
+	particle_mat.spread = 180.0
+	particle_mat.initial_velocity_min = 0.04
+	particle_mat.initial_velocity_max = 0.18
+	particle_mat.gravity = Vector3.ZERO
+	particle_mat.scale_min = 0.008
+	particle_mat.scale_max = 0.018
+
+	var scale_ramp := GradientTexture1D.new()
+	var scale_grad := Gradient.new()
+	scale_grad.offsets = PackedFloat32Array([0.0, 1.0])
+	scale_grad.colors = PackedColorArray([Color(1.0, 1.0, 1.0, 1.0), Color(1.0, 1.0, 1.0, 0.0)])
+	scale_ramp.gradient = scale_grad
+	particle_mat.scale_curve = scale_ramp
+
+	var color := state.mat.albedo_color
+	var color_ramp := GradientTexture1D.new()
+	var color_grad := Gradient.new()
+	color_grad.offsets = PackedFloat32Array([0.0, 0.5, 1.0])
+	color_grad.colors = PackedColorArray([
+		_color_tint(color, 1.3),
+		_color_tint(color, 0.85),
+		Color(color.r * 0.4, color.g * 0.4, color.b * 0.4, 0.0),
+	])
+	color_ramp.gradient = color_grad
+	particle_mat.color_ramp = color_ramp
+	aura.process_material = particle_mat
+
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.02, 0.02)
+	var draw_mat := StandardMaterial3D.new()
+	draw_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	draw_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	draw_mat.blend_mode = BaseMaterial3D.BLEND_MODE_ADD
+	draw_mat.vertex_color_use_as_albedo = true
+	draw_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	draw_mat.albedo_texture = _create_particle_texture()
+	quad.material = draw_mat
+	aura.draw_pass_1 = quad
+
+	state.body.add_child(aura)
+	state.aura = aura
+
+
+func _color_tint(color: Color, factor: float) -> Color:
+	var tinted := color * factor
+	tinted.a = 1.0
+	return tinted.clamp()
+
+
+func _create_particle_texture() -> ImageTexture:
+	var size := 32
+	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var center := (size - 1) * 0.5
+	for y in size:
+		for x in size:
+			var dx := (x - center) / center
+			var dy := (y - center) / center
+			var dist := sqrt(dx * dx + dy * dy)
+			var alpha := clampf(1.0 - dist, 0.0, 1.0)
+			alpha = alpha * alpha
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, alpha))
+	return ImageTexture.create_from_image(img)
 
 
 func _make_smoke_texture() -> ImageTexture:
@@ -969,7 +1064,9 @@ func _update_knocks() -> void:
 			var hand = _last_throw_hand
 			if hand == null or not is_instance_valid(hand):
 				hand = right_controller
-			rig.pulse_haptic(hand, 0.5, 0.06)
+			var speed := c.linear_velocity.length()
+			var haptic_strength := clampf(speed / 6.0, 0.2, 1.0)
+			rig.pulse_haptic(hand, lerpf(0.35, 0.95, haptic_strength), lerpf(0.04, 0.13, haptic_strength))
 	_update_score_label()
 	_check_round_progress()
 
@@ -1059,6 +1156,8 @@ func _update_ball_physics(delta: float) -> void:
 
 func _respawn_ball(state: BallState, chime: bool) -> void:
 	state.mode = BallMode.REST
+	if state.aura != null:
+		state.aura.emitting = false
 	state.body.freeze = true
 	state.body.linear_velocity = Vector3.ZERO
 	state.body.angular_velocity = Vector3.ZERO
@@ -1098,8 +1197,12 @@ func _handle_grip(hand) -> void:
 		if state.body.global_position.distance_to(target) <= GRAB_RADIUS:
 			state.mode = BallMode.HELD
 			state.held_hand = hand
-			rig.pulse_haptic(hand, 0.3, 0.05)
+			rig.pulse_haptic(hand, 0.15, 0.045)
+			if state.aura != null:
+				state.aura.emitting = true
 	elif not pressed and was and state.mode == BallMode.HELD and state.held_hand == hand:
+		if state.aura != null:
+			state.aura.emitting = false
 		var vel: Vector3 = _hand_velocity(hand)
 		if vel.length() >= THROW_MIN_SPEED:
 			state.mode = BallMode.FLYING
@@ -1108,8 +1211,9 @@ func _handle_grip(hand) -> void:
 			state.body.angular_velocity = Vector3(randf_range(-3.0, 3.0), randf_range(-3.0, 3.0), randf_range(-3.0, 3.0))
 			state.held_hand = null
 			_last_throw_hand = hand
-			_play_sound("whoosh", state.body.global_position, clampf(vel.length() / 8.0, 0.2, 1.0))
-			rig.pulse_haptic(hand, 0.5, 0.08)
+			var throw_strength := clampf(vel.length() / 8.0, 0.2, 1.0)
+			_play_sound("whoosh", state.body.global_position, throw_strength)
+			rig.pulse_haptic(hand, lerpf(0.35, 0.8, throw_strength), lerpf(0.05, 0.12, throw_strength))
 		else:
 			state.mode = BallMode.REST
 			state.held_hand = null
@@ -1249,8 +1353,14 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 		return
 	state.sound_at = now
 	var strength := clampf(state.body.linear_velocity.length() / 7.0, 0.1, 1.0)
+	var hand = state.held_hand if state.held_hand != null else _last_throw_hand
+	if hand == null or not is_instance_valid(hand):
+		hand = right_controller
+	rig.pulse_haptic(hand, lerpf(0.25, 0.85, strength), lerpf(0.03, 0.11, strength))
 
 	if is_cube:
+		if strength > 0.35:
+			_spawn_impact_flash(state.body.global_position, state.mat.albedo_color, strength)
 		_indent_cube(_other as Node3D, state.body)
 		if active_powerup == Powerup.ICE and state == _powerup_state:
 			_other.apply_central_impulse(state.body.linear_velocity.normalized() * ICE_IMPULSE)

@@ -54,6 +54,7 @@ class BallState:
 	var held_hand = null
 	var slow_time := 0.0
 	var sound_at := -100000
+	var trail: GPUParticles3D
 
 
 var sfx := SoundKitScript.new()
@@ -100,6 +101,7 @@ var _pending_powerup := Powerup.NONE
 var powerup_chance := POWERUP_CHANCE
 var _powerup_time := 0.0
 var _powerup_used := false
+var _powerup_state: BallState = null
 var _explosion_center := Vector3.ZERO
 var _explosion_ball_state: BallState = null
 var _last_throw_hand = null
@@ -109,6 +111,7 @@ var _congrats_label: Label3D
 var _restart_box: RigidBody3D
 var _restart_label: Label3D
 var _rounds_complete := false
+var _smoke_texture: ImageTexture = null
 
 
 func _init() -> void:
@@ -124,9 +127,11 @@ func _ready() -> void:
 
 	sfx.build()
 	_apply_floor_texture()
+	_apply_ceiling_texture()
 	_prepare_shared_cubes()
 	_spawn_tower()
 	_build_balls()
+	_build_wall_details()
 	_build_labels()
 	_build_sound_pool()
 	print("lab ready: %d cubes stacked" % cubes.size())
@@ -134,17 +139,68 @@ func _ready() -> void:
 
 
 func _apply_floor_texture() -> void:
-	var size := 512
-	var cells := 8
-	var cell := size / cells
-	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
-	for cy in cells:
-		for cx in cells:
-			var c := Color(0.60, 0.61, 0.63) if (cx + cy) % 2 == 0 else Color(0.50, 0.52, 0.55)
-			img.fill_rect(Rect2i(cx * cell, cy * cell, cell, cell), c)
-	var mat := floor_mesh.material_override as StandardMaterial3D
-	if mat != null:
-		mat.albedo_texture = ImageTexture.create_from_image(img)
+	var mat := floor_mesh.get_surface_override_material(0) as StandardMaterial3D
+	if mat == null:
+		return
+	var tex := _make_floor_texture()
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1.0, 1.0, 1.0)
+	mat.uv1_scale = Vector3(4, 4, 1)
+	mat.metallic = 0.0
+	mat.roughness = 0.35
+
+
+func _apply_ceiling_texture() -> void:
+	var ceiling_mesh: MeshInstance3D = $Lab/CeilingBody/CeilingMesh
+	var mat := ceiling_mesh.get_surface_override_material(0) as StandardMaterial3D
+	if mat == null:
+		return
+	var tex := load("res://assets/ceiling.jpg") as Texture2D
+	if tex == null:
+		return
+	mat.albedo_texture = tex
+	mat.albedo_color = Color(1.0, 1.0, 1.0)
+	mat.uv1_scale = Vector3(4, 4, 1)
+	mat.metallic = 0.0
+	mat.roughness = 0.95
+
+
+func _make_floor_texture() -> ImageTexture:
+	var s := 512
+	var tiles := 2
+	var tile := s / tiles
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	var base := Color(0.97, 0.95, 0.91)
+	for ty in tiles:
+		for tx in tiles:
+			var ox := tx * tile
+			var oy := ty * tile
+			var tbase := base.lightened(randf() * 0.02)
+			for y in tile:
+				for x in tile:
+					var px := float(x) / float(tile)
+					var py := float(y) / float(tile)
+					var v := sin(px * 14.0 + sin(py * 10.0) * 2.5) * 0.5 + 0.5
+					v += sin(py * 16.0 + cos(px * 7.0) * 2.0) * 0.35
+					v += sin((px + py) * 9.0) * 0.15
+					v /= 1.5
+					var c := tbase
+					if v > 0.65:
+						c = c.darkened(0.45 + (v - 0.65) * 0.8)
+					elif v < 0.30:
+						c = c.lightened(0.04)
+					img.set_pixel(ox + x, oy + y, c)
+	var grout := Color(0.40, 0.38, 0.35)
+	for t in range(1, tiles):
+		var gy := t * tile
+		for x in s:
+			for dy in range(-1, 2):
+				img.set_pixel(x, gy + dy, grout)
+		var gx := t * tile
+		for y in s:
+			for dx in range(-1, 2):
+				img.set_pixel(gx + dx, y, grout)
+	return ImageTexture.create_from_image(img)
 
 
 func row_color(row: int) -> Color:
@@ -452,12 +508,16 @@ func _unfreeze_cubes() -> void:
 
 
 func _build_balls() -> void:
+	if _smoke_texture == null:
+		_smoke_texture = _make_smoke_texture()
 	_build_ball_state(left_ball_state, Color(0.15, 0.75, 1.0), Color(0.08, 0.45, 0.7))
 	_build_ball_state(right_ball_state, Color(1.0, 0.5, 0.12), Color(1.0, 0.35, 0.08))
 	left_ball_state.body.name = "LeftBall"
 	right_ball_state.body.name = "RightBall"
 	add_child(left_ball_state.body)
 	add_child(right_ball_state.body)
+	_build_ball_trail(left_ball_state)
+	_build_ball_trail(right_ball_state)
 	left_ball_state.body.global_position = _ball_rest_point(left_controller)
 	right_ball_state.body.global_position = _ball_rest_point(right_controller)
 
@@ -530,6 +590,155 @@ func _build_sound_pool() -> void:
 		player.volume_db = -4.0
 		add_child(player)
 		_sound_players.append(player)
+
+
+func _build_wall_details() -> void:
+	_apply_wall_texture()
+	var trim_mat := StandardMaterial3D.new()
+	trim_mat.albedo_color = Color(0.72, 0.74, 0.78)
+	trim_mat.metallic = 0.55
+	trim_mat.roughness = 0.35
+	var pillar_mat := StandardMaterial3D.new()
+	pillar_mat.albedo_color = Color(0.20, 0.21, 0.23)
+	pillar_mat.metallic = 0.25
+	pillar_mat.roughness = 0.65
+	for body: Node3D in [$Lab/WallBack, $Lab/WallFront, $Lab/WallLeft, $Lab/WallRight]:
+		if not is_instance_valid(body):
+			continue
+		var shape := body.get_node("WallShape").shape as BoxShape3D
+		if shape == null:
+			continue
+		var size := shape.size
+		var basis := body.global_transform.basis
+		var long_dir: Vector3
+		var long_len: float
+		var thick: float
+		var normal: Vector3
+		if size.x >= size.z:
+			long_dir = basis.x
+			long_len = size.x
+			thick = size.z
+			normal = basis.z
+		else:
+			long_dir = basis.z
+			long_len = size.z
+			thick = size.x
+			normal = basis.x
+		var center := body.global_position
+		var base_h := 0.25
+		var base_d := 0.08
+		var base_pos := center + normal * (thick * 0.5 + base_d * 0.5) + Vector3(0.0, -size.y * 0.5 + base_h * 0.5, 0.0)
+		_add_trim_box($Lab, body.name + "Baseboard", base_pos, long_dir, normal, Vector3(long_len, base_h, base_d), trim_mat)
+		var band_h := 0.18
+		var band_d := 0.06
+		var band_pos := center + normal * (thick * 0.5 + band_d * 0.5)
+		_add_trim_box($Lab, body.name + "Band", band_pos, long_dir, normal, Vector3(long_len, band_h, band_d), trim_mat)
+		var pillar_w := 0.18
+		var pillar_d := 0.08
+		var spacing := 3.5
+		var count := maxi(2, int(long_len / spacing) + 1)
+		for i in count:
+			var t := 0.0 if count == 1 else float(i) / float(count - 1)
+			var offset := (t - 0.5) * long_len
+			var p_pos := center + long_dir * offset + normal * (thick * 0.5 + pillar_d * 0.5)
+			_add_trim_box($Lab, body.name + "Pillar%d" % i, p_pos, long_dir, normal, Vector3(pillar_w, size.y, pillar_d), pillar_mat)
+
+
+func _add_trim_box(parent: Node3D, node_name: String, pos: Vector3, long_dir: Vector3, normal: Vector3, dims: Vector3, mat: StandardMaterial3D) -> void:
+	var mesh := MeshInstance3D.new()
+	mesh.name = node_name
+	var box := BoxMesh.new()
+	box.size = dims
+	mesh.mesh = box
+	mesh.material_override = mat
+	var b := Basis(long_dir, Vector3.UP, normal)
+	if b.determinant() < 0.0:
+		b.y = -b.y
+	mesh.transform = Transform3D(b, pos)
+	parent.add_child(mesh)
+
+
+func _apply_wall_texture() -> void:
+	var wall_mesh: MeshInstance3D = $Lab/WallBack/WallMesh
+	var wall_mat: StandardMaterial3D = wall_mesh.get_surface_override_material(0) as StandardMaterial3D
+	if wall_mat == null:
+		return
+	var tex := load("res://assets/wallpaper.jpg") as Texture2D
+	if tex == null:
+		return
+	wall_mat.albedo_texture = tex
+	wall_mat.albedo_color = Color(1.0, 1.0, 1.0)
+	wall_mat.uv1_scale = Vector3(3, 2, 1)
+	wall_mat.metallic = 0.0
+	wall_mat.roughness = 0.9
+
+
+func _build_ball_trail(state: BallState) -> void:
+	var particles := GPUParticles3D.new()
+	particles.name = "Trail"
+	particles.amount = 40
+	particles.lifetime = 0.15
+	particles.fixed_fps = 60
+	particles.local_coords = false
+	particles.emitting = false
+	particles.transform = Transform3D.IDENTITY
+	particles.visibility_aabb = AABB(Vector3(-12, -12, -12), Vector3(24, 24, 24))
+	particles.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	particles.draw_order = GPUParticles3D.DRAW_ORDER_VIEW_DEPTH
+	var pm := ParticleProcessMaterial.new()
+	pm.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_SPHERE
+	pm.emission_sphere_radius = 0.015
+	pm.direction = Vector3(0.0, 0.04, 0.0)
+	pm.spread = 90.0
+	pm.initial_velocity_min = 0.0
+	pm.initial_velocity_max = 0.06
+	pm.gravity = Vector3(0.0, 0.03, 0.0)
+	pm.damping_min = 1.5
+	pm.damping_max = 3.5
+	pm.scale_min = 0.03
+	pm.scale_max = 0.09
+	var scale_curve := Curve.new()
+	scale_curve.add_point(Vector2(0.0, 1.0), 0.0, 0.0)
+	scale_curve.add_point(Vector2(1.0, 0.2), 0.0, 0.0)
+	var scale_texture := CurveTexture.new()
+	scale_texture.curve = scale_curve
+	pm.scale_curve = scale_texture
+	var grad := Gradient.new()
+	grad.add_point(0.0, Color(1.0, 1.0, 1.0, 0.11))
+	grad.add_point(1.0, Color(1.0, 1.0, 1.0, 0.0))
+	var grad_tex := GradientTexture1D.new()
+	grad_tex.gradient = grad
+	pm.color_ramp = grad_tex
+	pm.color = Color(state.mat.albedo_color.r, state.mat.albedo_color.g, state.mat.albedo_color.b, 0.2)
+	particles.process_material = pm
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.5, 0.5)
+	var qmat := StandardMaterial3D.new()
+	qmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	qmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	qmat.vertex_color_use_as_albedo = true
+	qmat.albedo_texture = _smoke_texture
+	qmat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	quad.material = qmat
+	particles.draw_pass_1 = quad
+	state.body.add_child(particles)
+	state.trail = particles
+
+
+func _make_smoke_texture() -> ImageTexture:
+	var s := 64
+	var img := Image.create(s, s, false, Image.FORMAT_RGBA8)
+	img.fill(Color(1.0, 1.0, 1.0, 0.0))
+	var cx := float(s) * 0.5
+	var cy := float(s) * 0.5
+	var radius := float(s) * 0.5
+	for y in s:
+		for x in s:
+			var d := sqrt((x + 0.5 - cx) * (x + 0.5 - cx) + (y + 0.5 - cy) * (y + 0.5 - cy)) / radius
+			if d < 1.0:
+				var a := pow(1.0 - d, 1.8)
+				img.set_pixel(x, y, Color(1.0, 1.0, 1.0, a))
+	return ImageTexture.create_from_image(img)
 
 
 func _show_hint(text: String, seconds: float) -> void:
@@ -703,7 +912,7 @@ func _respawn_ball(state: BallState, chime: bool) -> void:
 	state.body.rotation = Vector3.ZERO
 	state.slow_time = 0.0
 	if active_powerup == Powerup.NONE and _pending_powerup != Powerup.NONE:
-		_apply_pending_powerup()
+		_apply_pending_powerup(state)
 	if chime:
 		_play_sound("chime", state.body.global_position, 0.6)
 		_show_hint("New ball!", 1.6)
@@ -787,6 +996,11 @@ func _process(delta: float) -> void:
 		elif state.mode == BallMode.REST:
 			var rest := _ball_rest_point_for_state(state)
 			state.body.global_position = state.body.global_position.lerp(rest, clampf(delta * 8.0, 0.0, 1.0))
+		if state.trail != null:
+			state.trail.emitting = (state.mode == BallMode.FLYING)
+			if state.trail.process_material != null:
+				var c := state.mat.albedo_color
+				state.trail.process_material.color = Color(c.r, c.g, c.b, 0.2)
 	_recover_indents(delta)
 
 
@@ -816,9 +1030,9 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 
 	if is_cube:
 		_indent_cube(_other as Node3D, state.body)
-		if active_powerup == Powerup.ICE:
+		if active_powerup == Powerup.ICE and state == _powerup_state:
 			_other.apply_central_impulse(state.body.linear_velocity.normalized() * ICE_IMPULSE)
-		elif active_powerup == Powerup.FIRE and not _powerup_used:
+		elif active_powerup == Powerup.FIRE and state == _powerup_state and not _powerup_used:
 			_powerup_used = true
 			_explosion_center = state.body.global_position
 			_explosion_ball_state = state
@@ -865,26 +1079,41 @@ func _recover_indents(delta: float) -> void:
 		mesh.scale = target.lerp(Vector3.ONE, 1.0 - factor)
 
 
-func _apply_pending_powerup() -> void:
+func _apply_pending_powerup(for_state: BallState = null) -> void:
 	if _pending_powerup == Powerup.NONE:
+		return
+	var target := for_state
+	if target == null:
+		if right_ball_state.mode != BallMode.FLYING:
+			target = right_ball_state
+		elif left_ball_state.mode != BallMode.FLYING:
+			target = left_ball_state
+	if target == null:
 		return
 	active_powerup = _pending_powerup
 	_pending_powerup = Powerup.NONE
 	_powerup_time = POWERUP_DURATION
 	_powerup_used = false
-	_apply_powerup_visuals()
+	_powerup_state = target
+	_apply_powerup_visuals(target)
 	_update_score_label()
 
 
 func _grant_powerup(kind: int) -> void:
 	var name := _powerup_name(kind)
-	if active_powerup == Powerup.NONE and _any_ball_at_rest():
+	var target: BallState = null
+	if right_ball_state.mode != BallMode.FLYING:
+		target = right_ball_state
+	elif left_ball_state.mode != BallMode.FLYING:
+		target = left_ball_state
+	if active_powerup == Powerup.NONE and target != null:
 		active_powerup = kind as Powerup
 		_powerup_time = POWERUP_DURATION
 		_powerup_used = false
-		_apply_powerup_visuals()
+		_powerup_state = target
+		_apply_powerup_visuals(target)
 		_show_hint("%s BALL!" % name, 2.0)
-		_play_sound("chime", _ball_rest_point(), 1.0)
+		_play_sound("chime", _ball_rest_point_for_state(target), 1.0)
 	else:
 		_pending_powerup = kind as Powerup
 		_show_hint("NEXT: %s BALL!" % name, 2.0)
@@ -896,43 +1125,40 @@ func _clear_powerup() -> void:
 	active_powerup = Powerup.NONE
 	_powerup_time = 0.0
 	_powerup_used = false
-	for state: BallState in [left_ball_state, right_ball_state]:
-		if state.body != null:
-			state.body.mass = _base_ball_mass
-		if state.visual != null:
-			state.visual.scale = Vector3.ONE
-		if state.mat != null:
-			state.mat.albedo_color = state.base_color
-			state.mat.emission = state.base_emission
-			state.mat.emission_energy_multiplier = 0.6
+	if _powerup_state != null and is_instance_valid(_powerup_state.body):
+		_powerup_state.body.mass = _base_ball_mass
+		_powerup_state.visual.scale = Vector3.ONE
+		_powerup_state.mat.albedo_color = _powerup_state.base_color
+		_powerup_state.mat.emission = _powerup_state.base_emission
+		_powerup_state.mat.emission_energy_multiplier = 0.6
+	_powerup_state = null
 	_update_score_label()
 	if _pending_powerup != Powerup.NONE and _any_ball_at_rest():
 		_apply_pending_powerup()
 
 
-func _apply_powerup_visuals() -> void:
-	for state: BallState in [left_ball_state, right_ball_state]:
-		if state.body == null or state.visual == null or state.mat == null:
-			continue
-		match active_powerup:
-			Powerup.HEAVY:
-				state.body.mass = HEAVY_MASS
-				state.mat.albedo_color = Color(0.25, 0.25, 0.28)
-				state.mat.emission = Color(0.05, 0.05, 0.08)
-				state.mat.emission_energy_multiplier = 0.6
-				state.visual.scale = Vector3(1.5, 1.5, 1.5)
-			Powerup.ICE:
-				state.body.mass = ICE_MASS
-				state.mat.albedo_color = Color(0.75, 0.92, 1.0)
-				state.mat.emission = Color(0.4, 0.75, 0.95)
-				state.mat.emission_energy_multiplier = 0.9
-				state.visual.scale = Vector3(1.15, 1.15, 1.15)
-			Powerup.FIRE:
-				state.body.mass = _base_ball_mass
-				state.mat.albedo_color = Color(1.0, 0.18, 0.05)
-				state.mat.emission = Color(1.0, 0.08, 0.0)
-				state.mat.emission_energy_multiplier = 2.2
-				state.visual.scale = Vector3(1.25, 1.25, 1.25)
+func _apply_powerup_visuals(state: BallState) -> void:
+	if state.body == null or state.visual == null or state.mat == null:
+		return
+	match active_powerup:
+		Powerup.HEAVY:
+			state.body.mass = HEAVY_MASS
+			state.mat.albedo_color = Color(0.25, 0.25, 0.28)
+			state.mat.emission = Color(0.05, 0.05, 0.08)
+			state.mat.emission_energy_multiplier = 0.6
+			state.visual.scale = Vector3(1.5, 1.5, 1.5)
+		Powerup.ICE:
+			state.body.mass = ICE_MASS
+			state.mat.albedo_color = Color(0.75, 0.92, 1.0)
+			state.mat.emission = Color(0.4, 0.75, 0.95)
+			state.mat.emission_energy_multiplier = 0.9
+			state.visual.scale = Vector3(1.15, 1.15, 1.15)
+		Powerup.FIRE:
+			state.body.mass = _base_ball_mass
+			state.mat.albedo_color = Color(1.0, 0.18, 0.05)
+			state.mat.emission = Color(1.0, 0.08, 0.0)
+			state.mat.emission_energy_multiplier = 2.2
+			state.visual.scale = Vector3(1.25, 1.25, 1.25)
 
 
 func _explode() -> void:

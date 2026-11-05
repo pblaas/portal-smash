@@ -814,7 +814,7 @@ func _apply_wall_texture() -> void:
 	var wall_mat: StandardMaterial3D = wall_mesh.get_surface_override_material(0) as StandardMaterial3D
 	if wall_mat == null:
 		return
-	var tex := load("res://assets/wall_metal.jpg") as Texture2D
+	var tex := load("res://assets/wall_gray.jpg") as Texture2D
 	if tex == null:
 		return
 	wall_mat.albedo_texture = tex

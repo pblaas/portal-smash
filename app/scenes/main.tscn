@@ -175,6 +175,7 @@ shape = SubResource("floor_shape")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 6, -9.2)
 
 [node name="WallMesh" type="MeshInstance3D" parent="Lab/WallBack" unique_id=1165141028]
+gi_mode = 2
 mesh = SubResource("wall_mesh_z")
 surface_material_override/0 = SubResource("wall_mat")
 
@@ -185,6 +186,7 @@ shape = SubResource("wall_shape_z")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 6, 9.2)
 
 [node name="WallMesh" type="MeshInstance3D" parent="Lab/WallFront" unique_id=400047133]
+gi_mode = 2
 mesh = SubResource("wall_mesh_z")
 surface_material_override/0 = SubResource("wall_mat")
 
@@ -195,6 +197,7 @@ shape = SubResource("wall_shape_z")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -9.2, 6, 0)
 
 [node name="WallMesh" type="MeshInstance3D" parent="Lab/WallLeft" unique_id=1681367747]
+gi_mode = 2
 mesh = SubResource("wall_mesh_x")
 surface_material_override/0 = SubResource("wall_mat")
 
@@ -205,6 +208,7 @@ shape = SubResource("wall_shape_x")
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 9.2, 6, 0)
 
 [node name="WallMesh" type="MeshInstance3D" parent="Lab/WallRight" unique_id=833299424]
+gi_mode = 2
 mesh = SubResource("wall_mesh_x")
 surface_material_override/0 = SubResource("wall_mat")
 

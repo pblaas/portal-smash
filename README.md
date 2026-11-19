@@ -70,6 +70,10 @@ A visual smoke test can be run with:
 timeout 120 xvfb-run -a godot --path app --xr-mode off res://tests/screenshot.tscn
 ```
 
+## Disclaimer
+
+This product is provided "as is", without warranty of any kind, express or implied, including but not limited to the warranties of merchantability, fitness for a particular purpose, and non-infringement. Use of this product is entirely at your own risk. In no event shall the author be liable for any claim, damages, or other liability arising from, out of, or in connection with the product or its use.
+
 ## License
 
 This is a personal project; no license is specified.

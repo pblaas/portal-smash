@@ -16,6 +16,13 @@ const GRAB_RADIUS := 0.9
 const THROW_MIN_SPEED := 1.0
 const THROW_SPEED_SCALE := 1.25
 const KNOCK_DIST := 0.26
+const WAKE_RADIUS := 0.65
+const WAKE_DEPTH := 4.0
+const HIT_IMPULSE_SCALE := 0.5
+const HIT_IMPULSE_MIN := 0.6
+const HIT_IMPULSE_MAX := 6.0
+const SUPPORT_CHECK_INTERVAL := 0.2
+const SUPPORT_REACH := CUBE_PITCH * 0.9
 const SETTLE_SPEED := 0.7
 const SETTLE_TIME := 1.3
 const SOUND_POOL_SIZE := 10
@@ -61,6 +68,7 @@ class BallState:
 	var held_hand = null
 	var slow_time := 0.0
 	var sound_at := -100000
+	var prev_velocity := Vector3.ZERO
 	var trail: GPUParticles3D
 	var aura: GPUParticles3D
 
@@ -108,6 +116,7 @@ var _hand_prev := {}
 var _hand_vel := {}
 var _hit_sound_at := {}
 var _cube_sound_until := 0
+var _support_timer := 0.0
 var _base_ball_mass := BALL_BASE_MASS
 var active_powerup := Powerup.NONE
 var _pending_powerup := Powerup.NONE
@@ -297,7 +306,7 @@ func _prepare_shared_cubes() -> void:
 	_cube_mesh = BoxMesh.new()
 	_cube_mesh.size = Vector3(CUBE_EDGE, CUBE_EDGE, CUBE_EDGE)
 	_cube_phys = PhysicsMaterial.new()
-	_cube_phys.friction = 0.7
+	_cube_phys.friction = 0.25
 	_cube_phys.bounce = 0.0
 	for r in TOWER_ROWS:
 		var mat := StandardMaterial3D.new()
@@ -351,7 +360,7 @@ func _spawn_tower(design_index: int = 1, animate_rise: bool = false) -> void:
 	if animate_rise:
 		_transition_rise_start = _transition_time
 	else:
-		get_tree().create_timer(0.05).timeout.connect(_unfreeze_cubes)
+		get_tree().create_timer(0.05).timeout.connect(_arm_cubes)
 	_update_score_label()
 
 
@@ -456,18 +465,50 @@ func _design_square_pyramid() -> Array[Vector3]:
 	return positions
 
 
+func _grid_ring_cells(radius: float) -> Array[Vector2i]:
+	# One-cube-thick ring snapped to a square grid. The horizontal runs keep the
+	# loop face-connected (a pure staircase ring only touches at corners), so the
+	# wall is stable, hollow and every cube is exactly one pitch from its
+	# neighbours. Overlapping spawns would make the whole stack shove itself
+	# apart the moment it is hit.
+	var cells: Array[Vector2i] = []
+	var seen := {}
+	var r_cells := radius / CUBE_PITCH
+	var span := int(ceil(r_cells))
+	var prev_left := 0
+	var prev_right := 0
+	var first := true
+	for cz in range(-span, span + 1):
+		var reach := sqrt(maxf(r_cells * r_cells - float(cz * cz), 0.0))
+		var left := -int(round(reach))
+		var right := int(round(reach))
+		if first:
+			prev_left = left
+			prev_right = right
+			first = false
+		for x in range(mini(left, prev_left), maxi(left, prev_left) + 1):
+			var cell := Vector2i(x, cz)
+			if not seen.has(cell):
+				seen[cell] = true
+				cells.append(cell)
+		for x in range(mini(right, prev_right), maxi(right, prev_right) + 1):
+			var cell := Vector2i(x, cz)
+			if not seen.has(cell):
+				seen[cell] = true
+				cells.append(cell)
+		prev_left = left
+		prev_right = right
+	return cells
+
+
 func _design_cylinder() -> Array[Vector3]:
 	var positions: Array[Vector3] = []
 	var layers := 7
-	var radius := 2.0
+	var ring := _grid_ring_cells(2.0)
 	for r in layers:
 		var y := (float(r) + 0.5) * CUBE_PITCH
-		var circumference := int(2.0 * PI * radius / CUBE_PITCH)
-		for i in circumference:
-			var angle := float(i) / float(circumference) * TAU
-			var x := cos(angle) * radius
-			var z := sin(angle) * radius
-			positions.append(Vector3(x, y, z))
+		for cell in ring:
+			positions.append(Vector3(float(cell.x) * CUBE_PITCH, y, float(cell.y) * CUBE_PITCH))
 	return positions
 
 
@@ -496,51 +537,58 @@ func _design_cross() -> Array[Vector3]:
 
 
 func _design_spiral() -> Array[Vector3]:
+	# Closed rings whose centres trace a small helix as the tower climbs.
 	var positions: Array[Vector3] = []
 	var layers := 7
-	var radius := 2.0
+	var ring := _grid_ring_cells(2.0)
+	var amp := CUBE_PITCH * 0.3
+	var step := deg_to_rad(55.0)
 	for r in layers:
 		var y := (float(r) + 0.5) * CUBE_PITCH
-		var count := maxi(4, int(2.0 * PI * radius / CUBE_PITCH))
-		for i in count:
-			var angle := float(i) / float(count) * TAU + float(r) * 0.5
-			var x := cos(angle) * radius
-			var z := sin(angle) * radius
-			positions.append(Vector3(x, y, z))
+		var ox := cos(float(r) * step) * amp
+		var oz := sin(float(r) * step) * amp
+		for cell in ring:
+			positions.append(Vector3(float(cell.x) * CUBE_PITCH + ox, y, float(cell.y) * CUBE_PITCH + oz))
 	return positions
 
 
 func _design_castle() -> Array[Vector3]:
+	# Laid out on a square grid so turrets and walls meet flush without any
+	# cubes overlapping each other.
 	var positions: Array[Vector3] = []
-	# Four corner turrets.
-	var offset := 1.8
-	for corner in 4:
-		var cx := 1.0 if corner % 2 == 0 else -1.0
-		var cz := 1.0 if corner < 2 else -1.0
-		for h in 4:
-			for tx in 3:
-				for tz in 3:
-					var x := (cx * offset) + (float(tx) - 1.0) * CUBE_PITCH
-					var z := (cz * offset) + (float(tz) - 1.0) * CUBE_PITCH
-					var y := (float(h) + 0.5) * CUBE_PITCH
-					positions.append(Vector3(x, y, z))
-	# Connecting walls.
-	for h in 3:
-		for t in 5:
+	var corner := 3
+	var turret_height := 4
+	var wall_height := 3
+	var turret := {}
+	for cx in [-corner, corner]:
+		for cz in [-corner, corner]:
+			for tx in range(cx - 1, cx + 2):
+				for tz in range(cz - 1, cz + 2):
+					turret[Vector2i(tx, tz)] = true
+	var walls := {}
+	for t in range(-corner, corner + 1):
+		walls[Vector2i(t, corner)] = true
+		walls[Vector2i(t, -corner)] = true
+		walls[Vector2i(corner, t)] = true
+		walls[Vector2i(-corner, t)] = true
+	for cell: Vector2i in turret.keys():
+		for h in turret_height:
 			var y := (float(h) + 0.5) * CUBE_PITCH
-			var x := (float(t) - 2.0) * CUBE_PITCH
-			positions.append(Vector3(x, y, offset))
-			positions.append(Vector3(x, y, -offset))
-			positions.append(Vector3(offset, y, x))
-			positions.append(Vector3(-offset, y, x))
+			positions.append(Vector3(float(cell.x) * CUBE_PITCH, y, float(cell.y) * CUBE_PITCH))
+	for cell: Vector2i in walls.keys():
+		if turret.has(cell):
+			continue
+		for h in wall_height:
+			var y := (float(h) + 0.5) * CUBE_PITCH
+			positions.append(Vector3(float(cell.x) * CUBE_PITCH, y, float(cell.y) * CUBE_PITCH))
 	return positions
 
 
-func _unfreeze_cubes() -> void:
+func _arm_cubes() -> void:
 	for c in cubes:
 		if not is_instance_valid(c):
 			continue
-		c.freeze = false
+		c.freeze = true
 		c.scale = Vector3.ONE
 		c.collision_layer = 1
 		c.collision_mask = 1
@@ -548,6 +596,72 @@ func _unfreeze_cubes() -> void:
 		c.linear_velocity = Vector3.ZERO
 		c.angular_velocity = Vector3.ZERO
 		c.sleeping = true
+		c.set_meta("supports", _support_ids_for(c))
+
+
+func _support_ids_for(c: RigidBody3D) -> Array[int]:
+	var ids: Array[int] = []
+	var home: Vector3 = c.get_meta("home")
+	for o in cubes:
+		if o == c or not is_instance_valid(o):
+			continue
+		var ohome: Vector3 = o.get_meta("home")
+		var dy := home.y - ohome.y
+		if dy > CUBE_PITCH * 0.5 and dy < CUBE_PITCH * 1.5 \
+				and absf(ohome.x - home.x) < CUBE_PITCH * 0.6 \
+				and absf(ohome.z - home.z) < CUBE_PITCH * 0.6:
+			ids.append(o.get_instance_id())
+	return ids
+
+
+func _wake_cube(c: RigidBody3D) -> void:
+	if c == null or not is_instance_valid(c) or not c.freeze:
+		return
+	c.freeze = false
+	c.sleeping = false
+
+
+func _wake_impact(point: Vector3, dir: Vector3, radius: float, depth: float) -> Array:
+	# Wake the struck block's neighbours plus a narrow column ahead of it, so a
+	# forward hit can punch a local hole instead of being braced by frozen
+	# blocks deeper in the design.
+	var woken := []
+	var punch_radius := radius * 0.55
+	for c in cubes:
+		if not is_instance_valid(c) or not c.freeze:
+			continue
+		var off: Vector3 = c.global_position - point
+		var along := off.dot(dir)
+		var perp := (off - dir * along).length()
+		var near := off.length() <= radius
+		var punch := along >= -0.05 and along <= depth and perp <= punch_radius
+		if near or punch:
+			_wake_cube(c)
+			woken.append(c)
+	return woken
+
+
+func _is_supported(c: RigidBody3D) -> bool:
+	var ids: Array = c.get_meta("supports", [])
+	if ids.is_empty():
+		return true
+	for id in ids:
+		var o = instance_from_id(id)
+		if not is_instance_valid(o):
+			continue
+		if o.global_position.distance_to(o.get_meta("home")) < SUPPORT_REACH:
+			return true
+	return false
+
+
+func _update_support(delta: float) -> void:
+	_support_timer -= delta
+	if _support_timer > 0.0 or _transition_active:
+		return
+	_support_timer = SUPPORT_CHECK_INTERVAL
+	for c in cubes:
+		if is_instance_valid(c) and c.freeze and not _is_supported(c):
+			_wake_cube(c)
 
 
 func _build_balls() -> void:
@@ -1041,6 +1155,7 @@ func _hand_hold_point(hand) -> Vector3:
 func _physics_process(delta: float) -> void:
 	_process_events(delta)
 	_update_knocks()
+	_update_support(delta)
 	_update_ball_physics(delta)
 	_update_buttons()
 
@@ -1142,6 +1257,7 @@ func _update_ball_physics(delta: float) -> void:
 	for state: BallState in [left_ball_state, right_ball_state]:
 		if state.mode != BallMode.FLYING:
 			continue
+		state.prev_velocity = state.body.linear_velocity
 		if state.body.linear_velocity.length() < SETTLE_SPEED:
 			state.slow_time += delta
 			if state.slow_time > SETTLE_TIME:
@@ -1286,7 +1402,7 @@ func _update_transition(delta: float) -> void:
 
 	elif _transition_phase == TransitionPhase.SETTLING:
 		if _transition_time - _transition_settle_start >= TRANSITION_SETTLE_DURATION:
-			_unfreeze_cubes()
+			_arm_cubes()
 			_transition_active = false
 			_transition_phase = TransitionPhase.SINKING
 			_show_hint("ROUND %d/%d" % [current_round, ROUND_COUNT], 2.5)
@@ -1348,6 +1464,8 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 	if state.mode != BallMode.FLYING:
 		return
 	var is_cube := _other is RigidBody3D and cubes.has(_other)
+	if is_cube:
+		_wake_hit_cube(_other as RigidBody3D, state)
 	var now := Time.get_ticks_msec()
 	if now - state.sound_at < 200:
 		return
@@ -1361,9 +1479,10 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 	if is_cube:
 		if strength > 0.35:
 			_spawn_impact_flash(state.body.global_position, state.mat.albedo_color, strength)
-		_indent_cube(_other as Node3D, state.body)
+		_indent_cube(_other as Node3D, state.body, maxf(state.prev_velocity.length(), state.body.linear_velocity.length()))
 		if active_powerup == Powerup.ICE and state == _powerup_state:
-			_other.apply_central_impulse(state.body.linear_velocity.normalized() * ICE_IMPULSE)
+			var ice_dir := state.prev_velocity if state.prev_velocity.length() > 0.01 else state.body.linear_velocity
+			_other.apply_central_impulse(ice_dir.normalized() * ICE_IMPULSE)
 			_play_sound("ice", state.body.global_position, 1.0)
 		elif active_powerup == Powerup.FIRE and state == _powerup_state and not _powerup_used:
 			_powerup_used = true
@@ -1383,14 +1502,47 @@ func _on_ball_hit(_other: Node, state: BallState) -> void:
 		_play_sound("thud", state.body.global_position, strength)
 
 
-func _indent_cube(cube: RigidBody3D, other: Node3D) -> void:
+func _wake_hit_cube(cube: RigidBody3D, state: BallState) -> void:
+	var was_frozen := cube.freeze
+	_wake_cube(cube)
+	if not was_frozen:
+		return
+	# Knock the block in the ball's travel direction, like a real impact.
+	var dir := state.prev_velocity
+	if dir.length() < 0.01:
+		dir = state.body.linear_velocity
+	if dir.length() < 0.01:
+		dir = cube.global_position - state.body.global_position
+	if dir.length() < 0.001:
+		dir = Vector3(0.0, 0.0, -1.0)
+	# Prefer a horizontal shove for side hits so the block slides free
+	# instead of being pinned against the block below by friction.
+	if absf(dir.y) < dir.length() * 0.7:
+		dir.y = 0.0
+	var speed := maxf(state.prev_velocity.length(), state.body.linear_velocity.length())
+	var mass_scale := clampf(state.body.mass / BALL_BASE_MASS, 0.5, 3.0)
+	var impulse := clampf(speed * HIT_IMPULSE_SCALE * mass_scale, HIT_IMPULSE_MIN, HIT_IMPULSE_MAX)
+	var hit_dir := dir.normalized()
+	cube.apply_central_impulse(hit_dir * impulse)
+	for o in _wake_impact(cube.global_position, hit_dir, WAKE_RADIUS, WAKE_DEPTH):
+		if o == cube:
+			continue
+		var off: Vector3 = o.global_position - cube.global_position
+		var push := hit_dir
+		if off.length() > 0.001:
+			push = (hit_dir * 0.85 + off.normalized() * 0.15).normalized()
+		o.apply_central_impulse(push * impulse * 0.5)
+
+
+func _indent_cube(cube: RigidBody3D, other: Node3D, speed := -1.0) -> void:
 	var mesh := cube.get_node("Mesh") as MeshInstance3D
 	if mesh == null:
 		return
 	var impact_dir := (cube.global_position - other.global_position).normalized()
 	var local_dir := cube.global_transform.basis.inverse() * impact_dir
 	local_dir = local_dir.normalized()
-	var speed := cube.linear_velocity.length()
+	if speed < 0.0:
+		speed = cube.linear_velocity.length()
 	var amount := clampf(speed / 8.0, 0.04, INDENT_MAX)
 	var target := Vector3(
 		1.0 - abs(local_dir.x) * amount + (abs(local_dir.y) + abs(local_dir.z)) * amount * 0.35,
@@ -1510,11 +1662,12 @@ func _explode() -> void:
 			continue
 		var dir := c.global_position - _explosion_center
 		var dist := dir.length()
-		if dist < FIREBALL_RADIUS and dist > 0.001:
-			c.sleeping = false
-			var falloff := 1.0 - (dist / FIREBALL_RADIUS)
-			c.apply_central_impulse(dir.normalized() * FIREBALL_FORCE * falloff)
-			c.apply_torque_impulse(Vector3(randf_range(-2.0, 2.0), randf_range(-2.0, 2.0), randf_range(-2.0, 2.0)))
+		if dist < FIREBALL_RADIUS:
+			_wake_cube(c)
+			if dist > 0.001:
+				var falloff := 1.0 - (dist / FIREBALL_RADIUS)
+				c.apply_central_impulse(dir.normalized() * FIREBALL_FORCE * falloff)
+				c.apply_torque_impulse(Vector3(randf_range(-2.0, 2.0), randf_range(-2.0, 2.0), randf_range(-2.0, 2.0)))
 	_play_sound("whoosh", _explosion_center, 1.0)
 	_show_hint("BOOM!", 1.5)
 	var hand := left_controller if _explosion_ball_state == left_ball_state else right_controller

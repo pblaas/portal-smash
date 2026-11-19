@@ -14,12 +14,14 @@ var _failed := 0
 func _init() -> void:
 	print("=== Portal Smash test suite ===")
 	_test_layout_math()
+	_test_designs_no_overlap()
 	_test_sound_kit()
 	_test_app_log()
 	await _test_scene_smoke()
 	await _test_grip_throw()
 	await _test_powerups()
 	await _test_throw_knocks_cubes()
+	await _test_hit_is_local()
 	await _test_reset_tower()
 	print("checks passed: %d, failed: %d" % [_passed, _failed])
 	if _failed == 0:
@@ -78,6 +80,26 @@ func _test_layout_math() -> void:
 	_check(_approx(span.x, MainScript.CUBE_PITCH, 0.001), "neighbours in one row are exactly one pitch apart")
 
 
+func _test_designs_no_overlap() -> void:
+	# Overlapping spawns make the physics solver shove the whole stack apart the
+	# moment one cube is touched, so every design must be gap-free.
+	var m = MainScript.new()
+	for d in range(1, 11):
+		var pos: Array = m._design_positions(d)
+		var overlaps := 0
+		var min_gap := INF
+		for i in pos.size():
+			for j in range(i + 1, pos.size()):
+				var a: Vector3 = pos[i]
+				var b: Vector3 = pos[j]
+				var gap := maxf(absf(a.x - b.x), maxf(absf(a.y - b.y), absf(a.z - b.z))) - MainScript.CUBE_EDGE
+				min_gap = minf(min_gap, gap)
+				if gap < -0.001:
+					overlaps += 1
+		_check(overlaps == 0, "design %d has no overlapping cubes (%d overlaps, min gap %.3f)" % [d, overlaps, min_gap])
+	m.free()
+
+
 func _test_sound_kit() -> void:
 	var kit = SoundKitScript.new()
 	kit.build()
@@ -116,9 +138,9 @@ func _make_main() -> Node3D:
 	root.add_child(main)
 	await process_frame
 	await physics_frame
-	# Wait for the tower warm-up unfreeze before throwing at it.
+	# Wait for the tower to be armed (frozen in place, collidable).
 	for i in 30:
-		if main.cubes.size() > 0 and is_instance_valid(main.cubes[0]) and not main.cubes[0].freeze:
+		if main.cubes.size() > 0 and is_instance_valid(main.cubes[0]) and main.cubes[0].collision_layer == 1 and main.cubes[0].has_meta("supports"):
 			break
 		await physics_frame
 	return main
@@ -253,6 +275,37 @@ func _test_throw_knocks_cubes() -> void:
 	_check(main.ball_mode == 0, "ball respawned to REST after settling")
 	main.free()
 	_check(true, "throw physics flow complete")
+
+
+func _test_hit_is_local() -> void:
+	var main = await _make_main()
+	if main == null:
+		_check(false, "locality test needs main scene")
+		return
+	main.powerup_chance = 0.0
+	main.ball.mass = 10.0
+	var target = main.cubes[main.cubes.size() / 3]
+	main.launch_ball(target.global_position + Vector3(0.0, 0.0, 2.0), Vector3(0.0, 0.0, -6.0))
+	for i in 240:
+		await physics_frame
+	var scattered := 0
+	var still_frozen := 0
+	var mean_dz := 0.0
+	for c in main.cubes:
+		if not is_instance_valid(c):
+			continue
+		var delta: Vector3 = c.global_position - c.get_meta("home")
+		if delta.length() > 0.3:
+			scattered += 1
+			mean_dz += delta.z
+		if c.freeze:
+			still_frozen += 1
+	_check(scattered >= 1, "a hit still knocks blocks loose (scattered=%d)" % scattered)
+	_check(scattered < main.cubes.size() / 2, "a hit stays local instead of toppling the tower (scattered=%d/%d)" % [scattered, main.cubes.size()])
+	_check(still_frozen > main.cubes.size() / 2, "most blocks remain fixed after one hit (%d frozen)" % still_frozen)
+	_check(mean_dz < 0.0, "hit blocks travel in the ball's direction (mean dz=%.2f)" % (mean_dz / maxf(scattered, 1.0)))
+	main.free()
+	_check(true, "local hit flow complete")
 
 
 func _test_reset_tower() -> void:

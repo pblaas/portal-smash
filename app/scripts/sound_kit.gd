@@ -1,12 +1,10 @@
 extends RefCounted
 class_name SoundKit
 
-# Procedurally synthesized one-shots (16-bit mono WAV) so the app ships
-# zero audio files: knock impacts, ground thuds, throw whoosh, spawn chime,
-# power-up sounds, and looping background music layers.
+# Procedurally synthesized one-shots (16-bit mono WAV): knock impacts,
+# ground thuds, throw whoosh, spawn chime, and power-up sounds.
 
 const SAMPLE_RATE := 22050
-const BGM_DURATION := 8.0
 
 var knock: AudioStreamWAV
 var thud: AudioStreamWAV
@@ -15,8 +13,6 @@ var chime: AudioStreamWAV
 var heavy: AudioStreamWAV
 var ice: AudioStreamWAV
 var fire: AudioStreamWAV
-var bgm_calm: AudioStreamWAV
-var bgm_intense: AudioStreamWAV
 
 
 func build() -> void:
@@ -27,8 +23,6 @@ func build() -> void:
 	heavy = _synth(0.28, _make_heavy)
 	ice = _synth(0.35, _make_ice)
 	fire = _synth(0.55, _make_fire)
-	bgm_calm = _make_bgm(_make_bgm_calm)
-	bgm_intense = _make_bgm(_make_bgm_intense)
 
 
 static func _synth(duration: float, fill: Callable) -> AudioStreamWAV:
@@ -38,15 +32,6 @@ static func _synth(duration: float, fill: Callable) -> AudioStreamWAV:
 	for i in count:
 		samples[i] = float(fill.call(i, float(i) / SAMPLE_RATE, float(count) / SAMPLE_RATE))
 	return _pack_wav(samples, false)
-
-
-static func _make_bgm(fill: Callable) -> AudioStreamWAV:
-	var samples := PackedFloat32Array()
-	var count := int(BGM_DURATION * SAMPLE_RATE)
-	samples.resize(count)
-	for i in count:
-		samples[i] = float(fill.call(i, float(i) / SAMPLE_RATE, BGM_DURATION))
-	return _pack_wav(samples, true)
 
 
 static func _pack_wav(samples: PackedFloat32Array, loop: bool) -> AudioStreamWAV:
@@ -116,43 +101,6 @@ static func _make_fire(i: int, t: float, dur: float) -> float:
 	var env := exp(-t * 5.5)
 	var n := _white_noise(i) * 0.55 + _white_noise(i * 7) * 0.25
 	return n * env * 0.8
-
-
-static func _make_bgm_calm(i: int, t: float, dur: float) -> float:
-	var base := 55.0
-	var v := 0.0
-	# A-minor drone: A1, E2, A2 (all integer cycles over the loop)
-	var freqs := [base, base * 1.5, base * 2.0]
-	for f in freqs:
-		v += sin(t * f * 6.28318) * 0.14
-	# Slow breathing amplitude
-	v *= 0.55 + 0.45 * sin(t * 0.125 * 6.28318)
-	# Sparse high sparkle
-	var sparkle := _white_noise(i) * 0.03 if sin(t * 0.7) > 0.96 else 0.0
-	return v + sparkle
-
-
-static func _make_bgm_intense(i: int, t: float, dur: float) -> float:
-	var base := 55.0
-	var v := 0.0
-	# Driving low drone
-	v += sin(t * base * 6.28318) * 0.22
-	v += sin(t * base * 2.0 * 6.28318) * 0.12
-	# Four-on-the-floor kick every 0.5 s
-	var kick_t := fmod(t, 0.5)
-	var kick_env := exp(-kick_t * 35.0)
-	var kick_freq := 110.0 * exp(-kick_t * 12.0)
-	v += sin(t * kick_freq * 6.28318) * kick_env * 0.45
-	# Off-beat hat-ish noise
-	var hat_t := fmod(t + 0.25, 0.5)
-	if hat_t < 0.08:
-		v += _white_noise(i) * 0.22
-	# Faster arpeggio layer
-	var arp_step := int(fmod(t * 4.0, 4.0))
-	var arp_notes := [base * 1.5, base * 2.0, base * 1.2, base * 2.5]
-	var arp_env := exp(-fmod(t * 4.0, 1.0) * 8.0)
-	v += sin(t * arp_notes[arp_step] * 6.28318) * arp_env * 0.16
-	return v * 0.75
 
 
 static func _white_noise(i: int) -> float:

@@ -15,7 +15,7 @@ The game is designed for standing VR with two motion controllers.
 - **Physical blocks** — cubes are smaller and more numerous; they briefly indent on impact to feel like real objects.
 - **Power-ups** — random drops grant Heavy, Ice, or Fire balls.
 - **Restart flow** — complete all rounds, read the congratulations, then smash the green restart box to reset.
-- **Procedural audio** — all one-shot sounds are synthesized at runtime, no external audio files.
+- **Audio** — one-shot sound effects are synthesized at runtime; background music is a looping track (`app/assets/music/lounge_blues.mp3`).
 
 ## Controls
 

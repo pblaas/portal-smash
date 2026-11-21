@@ -21,7 +21,7 @@ const WAKE_DEPTH := 4.0
 const HIT_IMPULSE_SCALE := 0.5
 const HIT_IMPULSE_MIN := 0.6
 const HIT_IMPULSE_MAX := 6.0
-const SUPPORT_CHECK_INTERVAL := 0.2
+const SUPPORT_CHECK_INTERVAL := 0.05
 const SUPPORT_REACH := CUBE_PITCH * 0.9
 const SETTLE_SPEED := 0.7
 const SETTLE_TIME := 1.3
@@ -39,6 +39,7 @@ const INDENT_RECOVER := 0.22
 const INDENT_MAX := 0.18
 const ROUND_COUNT := 10
 const ROUND_ADVANCE_THRESHOLD := 0.98
+const ROUND_CLEAR_DELAY := 4.0
 const RESTART_BOX_SIZE := 1.4
 
 const TRANSITION_OLD_SINK_DURATION := 0.6
@@ -104,11 +105,9 @@ var _hint_time := 0.0
 var _version: Label3D
 var _sound_players: Array[AudioStreamPlayer3D] = []
 var _sound_next := 0
-var _bgm_calm: AudioStreamPlayer
-var _bgm_intense: AudioStreamPlayer
-const BGM_CALM_DB := -6.0
-const BGM_INTENSE_DB := -6.0
-const BGM_MUTE_DB := -80.0
+var _music: AudioStreamPlayer
+const MUSIC_DB := -8.0
+const MUSIC_PATH := "res://assets/music/lounge_blues.mp3"
 var _menu_was := false
 var _ax_was := false
 var _grip_was := {}
@@ -142,6 +141,8 @@ var _transition_phase := TransitionPhase.SINKING
 var _transition_old_cubes: Array[RigidBody3D] = []
 var _transition_rise_start := 0.0
 var _transition_settle_start := 0.0
+var _round_clear_pending := false
+var _round_clear_timer := 0.0
 
 
 func _init() -> void:
@@ -649,6 +650,10 @@ func _is_supported(c: RigidBody3D) -> bool:
 		var o = instance_from_id(id)
 		if not is_instance_valid(o):
 			continue
+		# A woken support is already moving out from under this cube, so it no
+		# longer holds anything up even if it has not travelled far yet.
+		if not o.freeze:
+			continue
 		if o.global_position.distance_to(o.get_meta("home")) < SUPPORT_REACH:
 			return true
 	return false
@@ -659,9 +664,15 @@ func _update_support(delta: float) -> void:
 	if _support_timer > 0.0 or _transition_active:
 		return
 	_support_timer = SUPPORT_CHECK_INTERVAL
-	for c in cubes:
-		if is_instance_valid(c) and c.freeze and not _is_supported(c):
-			_wake_cube(c)
+	# Cascade within the same tick: waking a block can free the ones stacked on
+	# it, so keep sweeping until nothing else loses support.
+	var changed := true
+	while changed:
+		changed = false
+		for c in cubes:
+			if is_instance_valid(c) and c.freeze and not _is_supported(c):
+				_wake_cube(c)
+				changed = true
 
 
 func _build_balls() -> void:
@@ -752,19 +763,16 @@ func _build_sound_pool() -> void:
 
 
 func _build_music() -> void:
-	_bgm_calm = AudioStreamPlayer.new()
-	_bgm_calm.name = "BgmCalm"
-	_bgm_calm.stream = sfx.bgm_calm
-	_bgm_calm.volume_db = BGM_CALM_DB
-	add_child(_bgm_calm)
-	_bgm_calm.play()
-
-	_bgm_intense = AudioStreamPlayer.new()
-	_bgm_intense.name = "BgmIntense"
-	_bgm_intense.stream = sfx.bgm_intense
-	_bgm_intense.volume_db = BGM_MUTE_DB
-	add_child(_bgm_intense)
-	_bgm_intense.play()
+	var stream := load(MUSIC_PATH) as AudioStreamMP3
+	if stream == null:
+		return
+	stream.loop = true
+	_music = AudioStreamPlayer.new()
+	_music.name = "Music"
+	_music.stream = stream
+	_music.volume_db = MUSIC_DB
+	add_child(_music)
+	_music.play()
 
 
 func _build_hand_models() -> void:
@@ -1187,11 +1195,24 @@ func _update_knocks() -> void:
 
 
 func _check_round_progress() -> void:
-	if _transition_active or _rounds_complete or cubes.is_empty():
+	if _transition_active or _rounds_complete or _round_clear_pending or cubes.is_empty():
 		return
 	var progress := float(score) / float(cubes.size())
 	if progress < ROUND_ADVANCE_THRESHOLD:
 		return
+	# Let the final hits play out so the player can watch the debris settle
+	# before the next design replaces the tower.
+	_round_clear_pending = true
+	_round_clear_timer = ROUND_CLEAR_DELAY
+
+
+func _update_round_clear(delta: float) -> void:
+	if not _round_clear_pending:
+		return
+	_round_clear_timer -= delta
+	if _round_clear_timer > 0.0:
+		return
+	_round_clear_pending = false
 	if current_round < ROUND_COUNT:
 		_start_round_transition()
 	else:
@@ -1201,6 +1222,7 @@ func _check_round_progress() -> void:
 func _start_round_transition() -> void:
 	if _transition_active:
 		return
+	_round_clear_pending = false
 	_transition_active = true
 	_transition_time = 0.0
 	_transition_phase = TransitionPhase.SINKING
@@ -1238,6 +1260,7 @@ func _complete_rounds() -> void:
 
 
 func _reset_rounds() -> void:
+	_round_clear_pending = false
 	_rounds_complete = false
 	current_round = 1
 	total_score = 0
@@ -1413,6 +1436,8 @@ func _update_transition(delta: float) -> void:
 func _process(delta: float) -> void:
 	if _transition_active:
 		_update_transition(delta)
+	else:
+		_update_round_clear(delta)
 	_hand_track(delta)
 	if active_powerup != Powerup.NONE:
 		_powerup_time -= delta
@@ -1420,11 +1445,6 @@ func _process(delta: float) -> void:
 			_clear_powerup()
 		if _pending_powerup != Powerup.NONE and _any_ball_at_rest():
 			_apply_pending_powerup()
-	if _bgm_calm != null and _bgm_intense != null:
-		var target_intense := BGM_INTENSE_DB if active_powerup != Powerup.NONE else BGM_MUTE_DB
-		var target_calm := BGM_MUTE_DB if active_powerup != Powerup.NONE else BGM_CALM_DB
-		_bgm_intense.volume_db = lerpf(_bgm_intense.volume_db, target_intense, delta * 4.0)
-		_bgm_calm.volume_db = lerpf(_bgm_calm.volume_db, target_calm, delta * 4.0)
 	for state: BallState in [left_ball_state, right_ball_state]:
 		if state.mode == BallMode.HELD:
 			var hand = state.held_hand
